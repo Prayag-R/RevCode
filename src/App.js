@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Settings, LogOut, Send, Code, MessageSquare, CheckCircle, Clock, TrendingUp } from 'lucide-react';
+import { Settings, LogOut} from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Reviews from './pages/Reviews';
