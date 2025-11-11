@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Settings, LogOut} from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Settings, LogOut } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
 import Reviews from './pages/Reviews';
@@ -29,6 +29,27 @@ export default function App() {
   const [isConnected, setIsConnected] = useState(false);
   const [userSites, setUserSites] = useState([]);
 
+  // Exchange OAuth code for token
+  const exchangeCode = useCallback(async (code) => {
+    try {
+      const res = await fetch(`${API_BASE}/oauth/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (data.access_token) {
+        setWordpressAccessToken(data.access_token);
+        setIsConnected(true);
+        localStorage.setItem('wordpress-access-token', data.access_token);
+        fetchUserSites(data.access_token);
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    } catch (err) {
+      console.error('Error exchanging code:', err);
+    }
+  }, []);
+
   // Initialize from localStorage and check for OAuth callback
   useEffect(() => {
     try {
@@ -53,7 +74,7 @@ export default function App() {
     } catch (err) {
       console.error('Error loading from localStorage:', err);
     }
-  }, []);
+  }, [exchangeCode]);
 
   // Save reviews to localStorage
   useEffect(() => {
@@ -64,27 +85,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('deployed', JSON.stringify(deployed));
   }, [deployed]);
-
-  // Exchange OAuth code for token
-  const exchangeCode = async (code) => {
-    try {
-      const res = await fetch(`${API_BASE}/oauth/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
-      });
-      const data = await res.json();
-      if (data.access_token) {
-        setWordpressAccessToken(data.access_token);
-        setIsConnected(true);
-        localStorage.setItem('wordpress-access-token', data.access_token);
-        fetchUserSites(data.access_token);
-        window.history.replaceState({}, document.title, window.location.pathname);
-      }
-    } catch (err) {
-      console.error('Error exchanging code:', err);
-    }
-  };
 
   // Fetch user sites
   const fetchUserSites = async (token) => {
