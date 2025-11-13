@@ -25,7 +25,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
 
   // WordPress states - Support both OAuth and direct setup
-  const [wordpressAccessToken, setWordpressAccessToken] = useState('');
+  const [setWordpressAccessToken] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [userSites, setUserSites] = useState([]);
   const [selectedSite, setSelectedSite] = useState(null);
