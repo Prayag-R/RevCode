@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { RefreshCw, CheckCircle, Copy, ArrowRight, AlertCircle } from 'lucide-react';
+import { RefreshCw, CheckCircle, Copy, ArrowRight, AlertCircle, Loader } from 'lucide-react';
 
 const API_BASE = process.env.REACT_APP_API_BASE || 'http://localhost:5000/api';
 
@@ -14,13 +14,12 @@ export default function Workflow({
   onCopyCode,
   onPromptChange,
   onBackToDashboard,
-  wordpressAccessToken,
-  userSites,
+  selectedSite,
   isConnected,
 }) {
-  const [selectedSite, setSelectedSite] = useState('');
   const [deployLoading, setDeployLoading] = useState(false);
   const [deployStatus, setDeployStatus] = useState(null);
+  const [codeType, setCodeType] = useState('css');
 
   const handleGenerateCodeWithContext = async () => {
     if (!promptDraft) {
@@ -35,6 +34,7 @@ export default function Workflow({
       });
       if (!res.ok) throw new Error('Failed to generate code');
       const data = await res.json();
+      setCodeType(data.code_type || 'css');
       onGenerateCode(data.code);
     } catch (err) {
       alert('Error generating code: ' + err.message);
@@ -42,10 +42,16 @@ export default function Workflow({
   };
 
   const handleDeploy = async () => {
-    if (!selectedSite || !generatedCode) {
-      alert('Please select a site and generate code first');
+    if (!generatedCode) {
+      alert('Please generate code first');
       return;
     }
+
+    if (!isConnected || !selectedSite) {
+      alert('Please connect a WordPress site first');
+      return;
+    }
+
     setDeployLoading(true);
     setDeployStatus('deploying');
     try {
@@ -53,14 +59,21 @@ export default function Workflow({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          siteUrl: selectedSite,
-          accessToken: wordpressAccessToken,
+          siteUrl: selectedSite.siteUrl,
+          apiKey: selectedSite.apiKey,
           code: generatedCode,
+          codeType: codeType,
         }),
       });
-      if (!res.ok) throw new Error('Deployment failed');
+
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Deployment failed');
+      }
+
       setDeployStatus('success');
-      setTimeout(() => setDeployStatus(null), 3000);
+      setTimeout(() => setDeployStatus(null), 5000);
     } catch (err) {
       setDeployStatus('error');
       alert('Deployment error: ' + err.message);
@@ -69,6 +82,14 @@ export default function Workflow({
       setDeployLoading(false);
     }
   };
+
+  if (!selectedReview) {
+    return (
+      <div className="text-center py-12">
+        <p className="text-slate-400">No review selected</p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -80,34 +101,15 @@ export default function Workflow({
       </button>
 
       {/* Connection Status */}
-      {!isConnected && (
+      {!isConnected ? (
         <div className="bg-yellow-900/20 border border-yellow-600 rounded-lg p-4">
           <AlertCircle className="w-5 h-5 text-yellow-400 inline mr-2" />
           <span className="text-yellow-300 text-sm">Connect WordPress in Settings to deploy code</span>
         </div>
-      )}
-
-      {isConnected && (
-        <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-green-400" />
-            <span className="text-sm text-slate-300">Connected to WordPress</span>
-          </div>
-          <div>
-            <label className="text-slate-400 text-xs block mb-2">Select Site</label>
-            <select
-              value={selectedSite}
-              onChange={(e) => setSelectedSite(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white text-sm"
-            >
-              <option value="">-- Select a Site --</option>
-              {userSites.map(site => (
-                <option key={site.id} value={site.url}>
-                  {site.name}
-                </option>
-              ))}
-            </select>
-          </div>
+      ) : (
+        <div className="bg-green-900/20 border border-green-600 rounded-lg p-4">
+          <CheckCircle className="w-5 h-5 text-green-400 inline mr-2" />
+          <span className="text-green-300 text-sm">Connected to: <strong>{selectedSite?.name}</strong> ({selectedSite?.siteUrl})</span>
         </div>
       )}
 
@@ -124,9 +126,16 @@ export default function Workflow({
             <button
               onClick={onGeneratePrompt}
               disabled={loading}
-              className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-semibold transition disabled:opacity-50"
+              className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-semibold transition disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              {loading ? 'Generating...' : 'Generate'}
+              {loading ? (
+                <>
+                  <Loader className="w-4 h-4 animate-spin" />
+                  Generating...
+                </>
+              ) : (
+                'Generate'
+              )}
             </button>
           ) : (
             <div className="bg-slate-900/50 p-3 rounded-lg text-slate-300 text-xs border border-slate-700 max-h-64 overflow-y-auto font-mono">
@@ -172,6 +181,17 @@ export default function Workflow({
               <h4 className="font-bold text-white">Deploy</h4>
             </div>
 
+            <label className="text-slate-400 text-xs block mb-2">Code Type</label>
+            <select
+              value={codeType}
+              onChange={(e) => setCodeType(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700 rounded-lg text-white text-sm mb-3"
+            >
+              <option value="css">CSS</option>
+              <option value="js">JavaScript</option>
+              <option value="html">HTML</option>
+            </select>
+
             <div className="bg-slate-900/50 p-3 rounded-lg text-slate-300 text-xs font-mono border border-slate-700 mb-3 max-h-40 overflow-y-auto">
               <pre>{generatedCode.substring(0, 200)}...</pre>
             </div>
@@ -186,23 +206,47 @@ export default function Workflow({
 
             <button
               onClick={handleDeploy}
-              disabled={deployLoading || !isConnected || !selectedSite}
-              className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white font-semibold transition disabled:opacity-50"
+              disabled={deployLoading || !isConnected}
+              className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-white font-semibold transition disabled:opacity-50 flex items-center justify-center gap-2"
             >
-              {!isConnected ? 'Connect WordPress First' : !selectedSite ? 'Select Site' : 'Deploy to WordPress'}
+              {deployLoading ? (
+                <>
+                  <Loader className="w-4 h-4 animate-spin" />
+                  Deploying...
+                </>
+              ) : !isConnected ? (
+                'Connect WordPress First'
+              ) : (
+                'Deploy to WordPress'
+              )}
             </button>
 
             {deployStatus && (
-              <div className={`p-3 rounded-lg text-center font-semibold mt-3 ${
+              <div className={`p-3 rounded-lg text-center font-semibold mt-3 flex items-center justify-center gap-2 ${
                 deployStatus === 'success'
                   ? 'bg-green-900/30 text-green-300'
                   : deployStatus === 'deploying'
                   ? 'bg-blue-900/30 text-blue-300'
                   : 'bg-red-900/30 text-red-300'
               }`}>
-                {deployStatus === 'success' && '✓ Deployed Successfully!'}
-                {deployStatus === 'deploying' && 'Deploying...'}
-                {deployStatus === 'error' && 'Deployment Error'}
+                {deployStatus === 'success' && (
+                  <>
+                    <CheckCircle className="w-4 h-4" />
+                    Deployed Successfully!
+                  </>
+                )}
+                {deployStatus === 'deploying' && (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Deploying...
+                  </>
+                )}
+                {deployStatus === 'error' && (
+                  <>
+                    <AlertCircle className="w-4 h-4" />
+                    Deployment Error
+                  </>
+                )}
               </div>
             )}
           </div>
