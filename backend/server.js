@@ -24,13 +24,67 @@ const WORDPRESS_TOKEN_URL = process.env.WORDPRESS_TOKEN_URL;
 // Simple in-memory storage (replace with database in production)
 const userWordPressSites = new Map();
 
+// ===== KNOWLEDGE BASE FOR GEMINI =====
+const KNOWLEDGE_BASE = `
+You are a WordPress code generator integrated with the AI Code Deployer plugin.
+
+## WHAT YOU CAN DO:
+- Generate CSS code for styling (use !important flags)
+- Generate vanilla JavaScript (no jQuery)
+- Generate HTML for content
+- Create responsive designs
+- Modify layouts, colors, typography, spacing
+
+## WHAT YOU CANNOT DO:
+- Execute PHP code (WordPress handles that)
+- Modify database directly
+- Install plugins or themes
+- Access WordPress admin functions
+- Modify existing database records
+- Create files on the server
+- Execute system commands
+
+## API LIMITATIONS:
+- Code is deployed to ALL pages (unless specified otherwise)
+- CSS/JS loads via wp_head hook (injects into <head>)
+- HTML injects into wp_footer (appears at bottom)
+- No direct file access - all code runs in browser
+- No AJAX calls to WordPress API endpoints (blocked by CORS/nonces)
+- Code runs with full page DOM access (XSS prevention your concern)
+
+## WORKAROUNDS & BEST PRACTICES:
+1. For styling conflicts: Use higher specificity + !important
+2. For timing issues: Wrap JS in DOMContentLoaded event
+3. For element targeting: Use vanilla DOM queries (querySelector, getElementById)
+4. For hiding elements: Use display: none or visibility: hidden in CSS
+5. For modifying text: Use JavaScript to change textContent or innerHTML
+6. For animations: Use CSS transitions and transforms
+7. For conditional logic: Use if/else based on element existence
+
+## CODE GENERATION RULES:
+- Return ONLY valid JSON with no markdown or extra text
+- Always include code_type: "css" | "js" | "html"
+- Wrap code in try-catch if it's JavaScript
+- Use data attributes for element targeting (e.g., [data-custom="value"])
+- Test code mentally before generating - will it work in a browser?
+- Assume code runs in browser, not on server
+- Never assume jQuery is available
+- Always use modern vanilla JavaScript (ES6+)
+
+## RESPONSE FORMAT:
+{
+  "code": "YOUR_CODE_HERE",
+  "code_type": "css" | "js" | "html",
+  "description": "What this code does in 1 sentence"
+}
+`;
+
 // ===== HEALTH CHECK =====
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok", hasGeminiKey: !!GEMINI_API_KEY });
 });
 
 // ===== WORDPRESS SITE REGISTRATION =====
-// Store WordPress site credentials
 app.post("/api/wordpress/register", (req, res) => {
   try {
     const { userId, siteUrl, apiKey } = req.body;
@@ -39,12 +93,10 @@ app.post("/api/wordpress/register", (req, res) => {
       return res.status(400).json({ error: "Missing userId, siteUrl, or apiKey" });
     }
 
-    // Validate URL format
     if (!siteUrl.startsWith("http://") && !siteUrl.startsWith("https://")) {
       return res.status(400).json({ error: "Invalid siteUrl format" });
     }
 
-    // Store the site credentials
     if (!userWordPressSites.has(userId)) {
       userWordPressSites.set(userId, []);
     }
@@ -69,7 +121,6 @@ app.post("/api/wordpress/register", (req, res) => {
   }
 });
 
-// Get registered WordPress sites
 app.get("/api/wordpress/sites/:userId", (req, res) => {
   try {
     const { userId } = req.params;
@@ -99,7 +150,6 @@ app.get("/api/oauth/authorize-url", (req, res) => {
   res.json({ authorizeUrl: url, state });
 });
 
-// Handle OAuth callback redirect
 app.get("/auth/callback", (req, res) => {
   const { code, state } = req.query;
   
@@ -187,10 +237,7 @@ app.post("/api/deploy-code", async (req, res) => {
       return res.status(400).json({ error: "codeType must be 'css', 'js', or 'html'" });
     }
 
-    // Normalize site URL (remove trailing slash)
     const normalizedUrl = siteUrl.replace(/\/$/, "");
-
-    // Deploy to WordPress plugin
     const deploymentUrl = `${normalizedUrl}/wp-json/aicd/v1/deploy`;
 
     const response = await axios.post(
@@ -264,14 +311,18 @@ app.post("/api/deploy-codes", async (req, res) => {
   }
 });
 
-// ===== GEMINI ENDPOINTS =====
+// ===== GEMINI ENDPOINTS WITH KNOWLEDGE BASE =====
 app.post("/api/generate-prompt", async (req, res) => {
   try {
     const { review } = req.body;
     if (!review) return res.status(400).json({ error: "Review required" });
 
     const r = await axios.post(`${GEMINI_BASE}?key=${GEMINI_API_KEY}`, {
-      contents: [{ parts: [{ text: `Create an actionable implementation prompt from this review:\n"${review}"` }] }],
+      contents: [{ 
+        parts: [{ 
+          text: `${KNOWLEDGE_BASE}\n\nCreate an actionable implementation prompt from this customer review:\n"${review}"` 
+        }] 
+      }],
       generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
     });
 
@@ -288,25 +339,10 @@ app.post("/api/generate-code", async (req, res) => {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
-    const systemPrompt = `You are a WordPress code generator. Generate ONLY valid CSS, JavaScript, or HTML code.
-    
-Return the code in this JSON format:
-{
-  "code": "YOUR_CODE_HERE",
-  "code_type": "css" or "js" or "html",
-  "description": "brief description"
-}
-
-Rules:
-- For styling changes, use CSS with !important flags
-- For interactions, use vanilla JavaScript (no jQuery)
-- Keep code production-ready
-- Return ONLY valid JSON, no markdown or extra text`;
-
     const r = await axios.post(`${GEMINI_BASE}?key=${GEMINI_API_KEY}`, {
       contents: [{ 
         parts: [{ 
-          text: `${systemPrompt}\n\nPrompt:\n${prompt}` 
+          text: `${KNOWLEDGE_BASE}\n\nBased on this prompt, generate WordPress code:\n${prompt}` 
         }] 
       }],
       generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
@@ -314,10 +350,8 @@ Rules:
 
     const responseText = r.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     
-    // Try to parse JSON from response
     let parsedCode;
     try {
-      // Extract JSON from response (in case there's extra text)
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       parsedCode = JSON.parse(jsonMatch ? jsonMatch[0] : responseText);
     } catch (parseErr) {
@@ -351,21 +385,18 @@ app.post("/api/setup/direct", async (req, res) => {
       });
     }
 
-    // Validate URL format
     if (!siteUrl.startsWith("http://") && !siteUrl.startsWith("https://")) {
       return res.status(400).json({ error: "Invalid URL format. Must start with http:// or https://" });
     }
 
-    // Verify the API key works by testing the plugin endpoint
     const testEndpoint = `${siteUrl.replace(/\/$/, "")}/wp-json/aicd/v1/deployments`;
     
     try {
-      const testRes = await axios.get(testEndpoint, {
+      await axios.get(testEndpoint, {
         headers: { "X-AICD-API-Key": apiKey },
         timeout: 5000
       });
 
-      // API key is valid, save it
       if (!userWordPressSites.has(userId)) {
         userWordPressSites.set(userId, []);
       }
@@ -425,17 +456,14 @@ app.post("/api/review-to-deploy", async (req, res) => {
 
     console.log("🔄 Starting review-to-deploy pipeline...");
 
-    // Step 1: Generate prompt from review
     console.log("📝 Generating prompt from review...");
     const promptRes = await axios.post(`http://localhost:${PORT}/api/generate-prompt`, { review });
     const prompt = promptRes.data.prompt;
 
-    // Step 2: Generate code from prompt
     console.log("💻 Generating code from prompt...");
     const codeRes = await axios.post(`http://localhost:${PORT}/api/generate-code`, { prompt });
     const { code, code_type, description } = codeRes.data;
 
-    // Step 3: Deploy code to WordPress
     console.log("🚀 Deploying code to WordPress...");
     const deployRes = await axios.post(`http://localhost:${PORT}/api/deploy-code`, {
       siteUrl,
@@ -472,4 +500,5 @@ app.listen(PORT, () => {
   console.log(`✓ WordPress OAuth Client ID: ${!!WORDPRESS_CLIENT_ID}`);
   console.log(`✓ Redirect URI: ${WORDPRESS_REDIRECT_URI}`);
   console.log(`✓ WordPress Plugin Integration: ACTIVE`);
+  console.log(`✓ Knowledge Base Loaded: YES`);
 });
