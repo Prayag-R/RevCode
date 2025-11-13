@@ -339,16 +339,74 @@ app.post("/api/generate-code", async (req, res) => {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
-    const r = await axios.post(`${GEMINI_BASE}?key=${GEMINI_API_KEY}`, {
+    console.log("🔄 Step 1: Refining prompt...");
+
+    // STEP 1: Refine the prompt first
+    const refinePrompt = `${KNOWLEDGE_BASE}
+
+You are a prompt refiner. Given a user request, improve it by:
+1. Being specific about what code type (CSS, JS, or HTML) is needed
+2. Clarifying exactly what the user wants
+3. Ensuring the request is achievable with browser-side code
+4. Adding technical details about implementation
+
+User request: "${prompt}"
+
+Return ONLY the refined prompt text, nothing else. No JSON, no markdown.`;
+
+    const refineRes = await axios.post(`${GEMINI_BASE}?key=${GEMINI_API_KEY}`, {
+      contents: [{ parts: [{ text: refinePrompt }] }],
+      generationConfig: { temperature: 0.5, maxOutputTokens: 512 },
+    });
+
+    const refinedPrompt = refineRes.data.candidates?.[0]?.content?.parts?.[0]?.text || prompt;
+    console.log("✅ Refined prompt:", refinedPrompt);
+
+    // STEP 2: Generate code based on refined prompt
+    console.log("🔄 Step 2: Generating code from refined prompt...");
+
+    const codeGenerationPrompt = `${KNOWLEDGE_BASE}
+
+Based on this refined user request, generate WordPress code:
+"${refinedPrompt}"
+
+CODE GENERATION RULES - CRITICAL:
+1. ALWAYS create elements FIRST before styling or modifying them
+2. If you need to create a new element (banner, section, overlay, etc):
+   - FIRST: Create the element with JavaScript
+   - SECOND: Add styling/CSS to that element
+   - NEVER try to target elements that don't exist yet
+3. Order of execution:
+   - Create/find DOM elements
+   - Add event listeners
+   - Apply styles
+   - Add animations
+4. Use data-custom attributes to create unique identifiers
+5. Always wrap in try-catch
+6. Return ONLY valid JSON with no markdown or extra text
+
+CODE STRUCTURE EXAMPLES:
+- For new banner: Create div → Add data-custom attribute → Add CSS for styling → Add animation JS
+- For new button: Create button element → Add text/classes → Add click handlers → Add CSS
+- For new overlay: Create overlay div → Add to body → Add close functionality → Add CSS animations
+
+Response format:
+{
+  "code": "YOUR_COMPLETE_CODE_HERE",
+  "code_type": "css" or "js" or "html",
+  "description": "Step-by-step: 1) Creates element 2) Styles it 3) Adds interactions"
+}`;
+
+    const codeRes = await axios.post(`${GEMINI_BASE}?key=${GEMINI_API_KEY}`, {
       contents: [{ 
         parts: [{ 
-          text: `${KNOWLEDGE_BASE}\n\nBased on this prompt, generate WordPress code:\n${prompt}` 
+          text: codeGenerationPrompt
         }] 
       }],
       generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
     });
 
-    const responseText = r.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    const responseText = codeRes.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     
     let parsedCode;
     try {
@@ -362,10 +420,13 @@ app.post("/api/generate-code", async (req, res) => {
       });
     }
 
+    console.log("✅ Code generated successfully");
+
     res.json({ 
       code: parsedCode.code,
       code_type: parsedCode.code_type,
-      description: parsedCode.description
+      description: parsedCode.description,
+      refinedPrompt: refinedPrompt
     });
   } catch (err) {
     console.error("Gemini code error:", err.message);
