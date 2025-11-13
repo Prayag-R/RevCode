@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Settings, LogOut, Plus } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import Dashboard from './pages/Dashboard';
@@ -24,10 +24,8 @@ export default function App() {
   const [generatedCode, setGeneratedCode] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // WordPress states - Support both OAuth and direct setup
-  const [setWordpressAccessToken] = useState('');
+  // WordPress states
   const [isConnected, setIsConnected] = useState(false);
-  const [userSites, setUserSites] = useState([]);
   const [selectedSite, setSelectedSite] = useState(null);
   
   // Direct setup states
@@ -37,36 +35,12 @@ export default function App() {
   const [directSiteName, setDirectSiteName] = useState('');
   const [directSetupLoading, setDirectSetupLoading] = useState(false);
 
-  // Exchange OAuth code for token
-  const exchangeCode = useCallback(async (code) => {
-    try {
-      const res = await fetch(`${API_BASE}/oauth/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
-      });
-      const data = await res.json();
-      if (data.access_token) {
-        setWordpressAccessToken(data.access_token);
-        setIsConnected(true);
-        localStorage.setItem('wordpress-access-token', data.access_token);
-        localStorage.setItem('wordpress-setup-method', 'oauth');
-        fetchUserSites(data.access_token);
-        window.history.replaceState({}, document.title, window.location.pathname);
-      }
-    } catch (err) {
-      console.error('Error exchanging code:', err);
-    }
-  }, []);
-
-  // Initialize from localStorage and check for OAuth callback
+  // Initialize from localStorage
   useEffect(() => {
     try {
       const savedReviews = localStorage.getItem('reviews');
-      const savedToken = localStorage.getItem('wordpress-access-token');
       const savedDeployed = localStorage.getItem('deployed');
       const savedSite = localStorage.getItem('wordpress-site');
-      const setupMethod = localStorage.getItem('wordpress-setup-method');
 
       if (savedReviews) setReviews(JSON.parse(savedReviews));
       if (savedDeployed) setDeployed(JSON.parse(savedDeployed));
@@ -75,25 +49,10 @@ export default function App() {
         setSelectedSite(JSON.parse(savedSite));
         setIsConnected(true);
       }
-
-      if (savedToken) {
-        setWordpressAccessToken(savedToken);
-        setIsConnected(true);
-        if (setupMethod === 'oauth') {
-          fetchUserSites(savedToken);
-        }
-      }
-
-      // Check for OAuth callback
-      const params = new URLSearchParams(window.location.search);
-      const code = params.get('code');
-      if (code) {
-        exchangeCode(code);
-      }
     } catch (err) {
       console.error('Error loading from localStorage:', err);
     }
-  }, [exchangeCode]);
+  }, []);
 
   // Save reviews to localStorage
   useEffect(() => {
@@ -105,31 +64,7 @@ export default function App() {
     localStorage.setItem('deployed', JSON.stringify(deployed));
   }, [deployed]);
 
-  // Fetch user sites from OAuth
-  const fetchUserSites = async (token) => {
-    try {
-      const res = await fetch(`${API_BASE}/list-wordpress-sites`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      setUserSites(data.sites || []);
-    } catch (err) {
-      console.error('Error fetching sites:', err);
-    }
-  };
-
-  // Connect via OAuth
-  const handleConnectWordPress = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/oauth/authorize-url`);
-      const data = await res.json();
-      window.location.href = data.authorizeUrl;
-    } catch (err) {
-      alert('Error connecting to WordPress: ' + err.message);
-    }
-  };
-
-  // Direct setup (no OAuth)
+  // Direct setup
   const handleDirectSetup = async () => {
     if (!directSiteUrl.trim() || !directApiKey.trim()) {
       alert('Please enter both Site URL and API Key');
@@ -142,7 +77,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: 'user-' + Date.now(), // Simple user ID
+          userId: 'user-' + Date.now(),
           siteUrl: directSiteUrl,
           apiKey: directApiKey,
           siteName: directSiteName || 'My WordPress Site'
@@ -156,7 +91,6 @@ export default function App() {
         return;
       }
 
-      // Save site info
       const siteData = {
         name: data.site.name,
         siteUrl: data.site.siteUrl,
@@ -168,7 +102,6 @@ export default function App() {
       localStorage.setItem('wordpress-site', JSON.stringify(siteData));
       localStorage.setItem('wordpress-setup-method', 'direct');
 
-      // Clear form
       setDirectSiteUrl('');
       setDirectApiKey('');
       setDirectSiteName('');
@@ -184,13 +117,10 @@ export default function App() {
 
   // Disconnect WordPress
   const handleDisconnectWordPress = () => {
-    localStorage.removeItem('wordpress-access-token');
     localStorage.removeItem('wordpress-site');
     localStorage.removeItem('wordpress-setup-method');
-    setWordpressAccessToken('');
     setSelectedSite(null);
     setIsConnected(false);
-    setUserSites([]);
   };
 
   // API helper
@@ -377,22 +307,6 @@ export default function App() {
                         </button>
                       </div>
                     )}
-
-                    <div className="relative">
-                      <div className="absolute inset-0 flex items-center">
-                        <div className="w-full border-t border-slate-700"></div>
-                      </div>
-                      <div className="relative flex justify-center text-sm">
-                        <span className="px-2 bg-[#131B2E] text-slate-400">or</span>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={handleConnectWordPress}
-                      className="w-full px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-white font-semibold transition"
-                    >
-                      Connect via WordPress OAuth
-                    </button>
                   </>
                 ) : (
                   <div className="space-y-3">
@@ -403,9 +317,6 @@ export default function App() {
                           <p className="text-slate-400 text-xs mt-2">{selectedSite.name}</p>
                           <p className="text-slate-400 text-xs">{selectedSite.siteUrl}</p>
                         </>
-                      )}
-                      {userSites.length > 0 && (
-                        <p className="text-slate-400 text-xs mt-2">{userSites.length} OAuth site(s) available</p>
                       )}
                     </div>
                     <button
