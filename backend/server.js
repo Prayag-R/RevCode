@@ -417,22 +417,16 @@ app.post("/api/generate-code", async (req, res) => {
     }
 
     // STEP 1: Refine the prompt first
-    const refinePrompt = `${KNOWLEDGE_BASE}${siteContext}
+    const refinePrompt = `You are a prompt refiner for WordPress code generation.
 
-You are a prompt refiner. Given a user request and website context, improve it by:
-1. Being specific about what code type (CSS, JS, or HTML) is needed
-2. Understanding the existing website structure
-3. Ensuring changes fit with the current design
-4. Clarifying exactly what the user wants
-5. Ensuring the request is achievable with browser-side code
+Improve this request to be clear and specific:
+"${prompt}"
 
-User request: "${prompt}"
-
-Return ONLY the refined prompt text, nothing else. No JSON, no markdown.`;
+Return ONLY the refined text. No JSON, no markdown, just text.`;
 
     const refineRes = await axios.post(`${GEMINI_BASE}?key=${GEMINI_API_KEY}`, {
       contents: [{ parts: [{ text: refinePrompt }] }],
-      generationConfig: { temperature: 0.5, maxOutputTokens: 512 },
+      generationConfig: { temperature: 0.5, maxOutputTokens: 256 },
     });
 
     const refinedPrompt = refineRes.data.candidates?.[0]?.content?.parts?.[0]?.text || prompt;
@@ -441,38 +435,25 @@ Return ONLY the refined prompt text, nothing else. No JSON, no markdown.`;
     // STEP 2: Generate code based on refined prompt
     console.log("🔄 Step 2: Generating code from refined prompt...");
 
-    const codeGenerationPrompt = `${KNOWLEDGE_BASE}${siteContext}
+    const codeGenerationPrompt = `You are a WordPress code generator. Generate code that will be deployed to a WordPress site via the AI Code Deployer plugin.
 
-Based on this refined user request and website context, generate WordPress code:
-"${refinedPrompt}"
+USER REQUEST: "${refinedPrompt}"
 
-CODE GENERATION RULES - CRITICAL:
-1. ALWAYS create elements FIRST before styling or modifying them
-2. If you need to create a new element (banner, section, overlay, etc):
-   - FIRST: Create the element with JavaScript
-   - SECOND: Add styling/CSS to that element
-   - NEVER try to target elements that don't exist yet
-3. Order of execution:
-   - Create/find DOM elements
-   - Add event listeners
-   - Apply styles
-   - Add animations
-4. Use data-custom attributes to create unique identifiers
-5. Always wrap in try-catch
-6. Match the existing website's design style and color scheme
-7. Return ONLY valid JSON with no markdown or extra text
+RULES:
+- Return ONLY valid JSON (no markdown, no extra text)
+- If creating new elements, create them with JavaScript FIRST, then style them
+- Use data-custom attributes for new elements
+- Wrap JavaScript in try-catch
+- Use !important in CSS to override existing styles
+- Return this exact format:
 
-CODE STRUCTURE EXAMPLES:
-- For new banner: Create div → Add data-custom attribute → Add CSS for styling → Add animation JS
-- For new button: Create button element → Add text/classes → Add click handlers → Add CSS
-- For new overlay: Create overlay div → Add to body → Add close functionality → Add CSS animations
-
-Response format:
 {
-  "code": "YOUR_COMPLETE_CODE_HERE",
+  "code": "YOUR CODE HERE",
   "code_type": "css" or "js" or "html",
-  "description": "Step-by-step: 1) Creates element 2) Styles it 3) Adds interactions"
-}`;
+  "description": "Brief description"
+}
+
+Generate the code now:`;
 
     const codeRes = await axios.post(`${GEMINI_BASE}?key=${GEMINI_API_KEY}`, {
       contents: [{ 
@@ -480,20 +461,27 @@ Response format:
           text: codeGenerationPrompt
         }] 
       }],
-      generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+      generationConfig: { temperature: 0.6, maxOutputTokens: 1500 },
     });
 
     const responseText = codeRes.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
     
+    console.log("Raw Gemini response:", responseText.substring(0, 200));
+    
     let parsedCode;
     try {
+      // Try to find and parse JSON
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      parsedCode = JSON.parse(jsonMatch ? jsonMatch[0] : responseText);
+      if (!jsonMatch) {
+        throw new Error("No JSON found in response");
+      }
+      parsedCode = JSON.parse(jsonMatch[0]);
     } catch (parseErr) {
-      console.error("Failed to parse Gemini response:", responseText);
-      return res.status(500).json({ 
-        error: "Failed to parse generated code", 
-        rawResponse: responseText 
+      console.error("Failed to parse Gemini response:", responseText.substring(0, 500));
+      return res.status(400).json({ 
+        error: "Gemini returned invalid format", 
+        details: "Try rephrasing your request",
+        rawResponse: responseText.substring(0, 300)
       });
     }
 
@@ -507,7 +495,7 @@ Response format:
     });
   } catch (err) {
     console.error("Gemini code error:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Code generation failed", details: err.message });
   }
 });
 
