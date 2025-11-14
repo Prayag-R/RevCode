@@ -311,16 +311,82 @@ app.post("/api/deploy-codes", async (req, res) => {
   }
 });
 
+// ===== FETCH WEBSITE STRUCTURE =====
+const fetchWebsiteStructure = async (siteUrl) => {
+  try {
+    console.log(`📥 Fetching website structure from ${siteUrl}...`);
+    
+    const response = await axios.get(siteUrl, {
+      timeout: 5000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      maxRedirects: 5
+    });
+
+    const html = response.data;
+    
+    // Extract useful parts
+    const headMatch = html.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+    const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+    
+    // Extract meta tags
+    const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+    const title = titleMatch ? titleMatch[1].substring(0, 100) : 'Unknown';
+    
+    // Extract main content (first 2000 chars of body)
+    const bodyContent = bodyMatch ? bodyMatch[1].substring(0, 2000) : '';
+    
+    // Extract CSS
+    const styleMatches = html.match(/<style[^>]*>([\s\S]*?)<\/style>/gi) || [];
+    const inlineCSS = styleMatches.map(s => s.replace(/<\/?style[^>]*>/gi, '')).join('\n').substring(0, 1500);
+    
+    // Extract external stylesheets
+    const linkMatches = html.match(/<link[^>]*rel=["\']stylesheet["\'][^>]*>/gi) || [];
+    const stylesheets = linkMatches.slice(0, 3).join('\n'); // First 3 stylesheets
+    
+    const structure = {
+      title,
+      bodyPreview: bodyContent,
+      inlineCSS,
+      stylesheets,
+      fullHTML: html.substring(0, 3000) // First 3000 chars for context
+    };
+    
+    console.log("✅ Website structure fetched successfully");
+    return structure;
+  } catch (err) {
+    console.error("Failed to fetch website structure:", err.message);
+    // Return empty context instead of crashing
+    return {
+      title: 'Website',
+      bodyPreview: '',
+      inlineCSS: '',
+      stylesheets: '',
+      fullHTML: ''
+    };
+  }
+};
+
 // ===== GEMINI ENDPOINTS WITH KNOWLEDGE BASE =====
 app.post("/api/generate-prompt", async (req, res) => {
   try {
-    const { review } = req.body;
+    const { review, siteUrl } = req.body;
     if (!review) return res.status(400).json({ error: "Review required" });
+
+    // Fetch website structure if provided
+    let siteContext = '';
+    if (siteUrl) {
+      const structure = await fetchWebsiteStructure(siteUrl);
+      if (structure) {
+        siteContext = `\n\nWEBSITE CONTEXT:\nTitle: ${structure.title}\nBody Preview:\n${structure.bodyPreview}\n\nInline CSS:\n${structure.inlineCSS}`;
+      }
+    }
 
     const r = await axios.post(`${GEMINI_BASE}?key=${GEMINI_API_KEY}`, {
       contents: [{ 
         parts: [{ 
-          text: `${KNOWLEDGE_BASE}\n\nCreate an actionable implementation prompt from this customer review:\n"${review}"` 
+          text: `${KNOWLEDGE_BASE}\n\nCreate an actionable implementation prompt from this customer review:\n"${review}"${siteContext}` 
         }] 
       }],
       generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
@@ -336,19 +402,29 @@ app.post("/api/generate-prompt", async (req, res) => {
 
 app.post("/api/generate-code", async (req, res) => {
   try {
-    const { prompt } = req.body;
+    const { prompt, siteUrl } = req.body;
     if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
     console.log("🔄 Step 1: Refining prompt...");
 
-    // STEP 1: Refine the prompt first
-    const refinePrompt = `${KNOWLEDGE_BASE}
+    // Fetch website structure for context
+    let siteContext = '';
+    if (siteUrl) {
+      const structure = await fetchWebsiteStructure(siteUrl);
+      if (structure) {
+        siteContext = `\n\nWEBSITE STRUCTURE:\nTitle: ${structure.title}\n\nHTML Structure:\n${structure.fullHTML}\n\nExisting CSS:\n${structure.inlineCSS}\n\nStylesheets:\n${structure.stylesheets}`;
+      }
+    }
 
-You are a prompt refiner. Given a user request, improve it by:
+    // STEP 1: Refine the prompt first
+    const refinePrompt = `${KNOWLEDGE_BASE}${siteContext}
+
+You are a prompt refiner. Given a user request and website context, improve it by:
 1. Being specific about what code type (CSS, JS, or HTML) is needed
-2. Clarifying exactly what the user wants
-3. Ensuring the request is achievable with browser-side code
-4. Adding technical details about implementation
+2. Understanding the existing website structure
+3. Ensuring changes fit with the current design
+4. Clarifying exactly what the user wants
+5. Ensuring the request is achievable with browser-side code
 
 User request: "${prompt}"
 
@@ -365,9 +441,9 @@ Return ONLY the refined prompt text, nothing else. No JSON, no markdown.`;
     // STEP 2: Generate code based on refined prompt
     console.log("🔄 Step 2: Generating code from refined prompt...");
 
-    const codeGenerationPrompt = `${KNOWLEDGE_BASE}
+    const codeGenerationPrompt = `${KNOWLEDGE_BASE}${siteContext}
 
-Based on this refined user request, generate WordPress code:
+Based on this refined user request and website context, generate WordPress code:
 "${refinedPrompt}"
 
 CODE GENERATION RULES - CRITICAL:
@@ -383,7 +459,8 @@ CODE GENERATION RULES - CRITICAL:
    - Add animations
 4. Use data-custom attributes to create unique identifiers
 5. Always wrap in try-catch
-6. Return ONLY valid JSON with no markdown or extra text
+6. Match the existing website's design style and color scheme
+7. Return ONLY valid JSON with no markdown or extra text
 
 CODE STRUCTURE EXAMPLES:
 - For new banner: Create div → Add data-custom attribute → Add CSS for styling → Add animation JS
